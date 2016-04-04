@@ -436,7 +436,9 @@ module GrapeSwagger
         end
 
         namespace_routes_array = namespace_routes.keys.map do |local_route|
-          next if namespace_routes[local_route].map(&:route_hidden).all? { |value| value.respond_to?(:call) ? value.call : value }
+          next if namespace_routes[local_route].map do |route|
+            route.settings[:description] && route.settings[:description][:hidden]
+          end.all? { |value| value.respond_to?(:call) ? value.call : value }
 
           url_format = '.{format}' unless @@hide_format
           url_locale = "?locale=#{params[:locale]}" unless params[:locale].blank?
@@ -488,11 +490,12 @@ module GrapeSwagger
         error!('Not Found', 404) unless routes
 
         visible_ops = routes.reject do |route|
-          route.route_hidden.respond_to?(:call) ? route.route_hidden.call : route.route_hidden
+          hidden = route.route_hidden
+          hidden && hidden.respond_to?(:call) ? hidden.call : hidden
         end
 
         ops = visible_ops.group_by do |route|
-          @@documentation_class.parse_path(route.route_path, api_version)
+          @@documentation_class.parse_path(route.path, api_version)
         end
 
         error!('Not Found', 404) unless ops.any?
@@ -501,51 +504,57 @@ module GrapeSwagger
 
         ops.each do |path, op_routes|
           operations = op_routes.map do |route|
+            route_settings_description = route.settings[:description] || {}
             endpoint = target_class.endpoint_mapping[route.to_s.sub('(.:format)', '')]
             endpoint_path = endpoint.options[:path] unless endpoint.nil?
-            i18n_key = [route.route_namespace, endpoint_path, route.route_method.downcase].flatten.join('/')
+            i18n_key = [route.namespace, endpoint_path, route.request_method.downcase].flatten.join('/')
             i18n_key = i18n_key.split('/').reject(&:empty?).join('.')
 
             summary = @@documentation_class.translate(
-              route.route_description, i18n_scope,
+              route.description, i18n_scope,
               [:"#{i18n_key}.desc", :"#{i18n_key}.description"]
             )
             notes = @@documentation_class.translate(
-              route.route_detail || route.route_notes, i18n_scope,
+              route_settings_description[:detail] || route_settings_description[:notes], i18n_scope,
               [:"#{i18n_key}.detail", :"#{i18n_key}.notes"]
             )
             notes       = @@documentation_class.as_markdown(notes)
 
-            http_codes  = @@documentation_class.parse_http_codes(route.route_http_codes, models)
+            http_codes  = @@documentation_class.parse_http_codes(route.http_codes, models)
 
-            models.merge(Array(route.route_entity)) if route.route_entity.present?
+            models.merge(Array(route.entity)) if route.entity.present?
+
+            route_settings_description = route.settings[:description] || {}
 
             operation = {
               notes: notes.to_s,
               summary: summary,
-              nickname: route.route_nickname || (route.route_method + route.route_path.gsub(/[\/:\(\)\.]/, '-')),
-              method: route.route_method,
-              parameters: @@documentation_class.parse_header_params(route.route_headers, scope: i18n_scope, key: i18n_key) +
-                          @@documentation_class.parse_params(route.route_params, route.route_path, route.route_method,
+              nickname: route_settings_description[:nickname] || (route.request_method + route.path.gsub(/[\/:\(\)\.]/, '-')),
+              method: route.request_method,
+              parameters: @@documentation_class.parse_header_params(route.headers, scope: i18n_scope, key: i18n_key) +
+                          @@documentation_class.parse_params(route.route_params, route.path, route.request_method,
                                                              scope: i18n_scope, key: i18n_key),
-              type: route.route_is_array ? 'array' : 'void'
+              type: route_settings_description[:is_array] ? 'array' : 'void'
             }
-            operation[:authorizations] = route.route_authorizations unless route.route_authorizations.nil? || route.route_authorizations.empty?
+
+            authorizations = route_settings_description[:authorizations]
+            operation[:authorizations] = authorizations if authorizations && authorizations.any?
+
             if operation[:parameters].any? { |param| param[:type] == 'File' }
               operation.merge!(consumes: ['multipart/form-data'])
             end
             operation.merge!(responseMessages: http_codes) unless http_codes.empty?
 
-            if route.route_entity
-              type = @@documentation_class.parse_entity_name(Array(route.route_entity).first)
-              if route.route_is_array
+            if route.entity
+              type = @@documentation_class.parse_entity_name(Array(route.entity).first)
+              if route_settings_description[:is_array]
                 operation.merge!(items: { '$ref' => type })
               else
                 operation.merge!(type: type)
               end
             end
 
-            operation[:nickname] = route.route_nickname if route.route_nickname
+            operation[:nickname] = route_settings_description[:nickname] if route_settings_description.key?(:nickname)
             operation
           end.compact
           apis << {
