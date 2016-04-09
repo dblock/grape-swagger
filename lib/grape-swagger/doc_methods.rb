@@ -490,7 +490,7 @@ module GrapeSwagger
         error!('Not Found', 404) unless routes
 
         visible_ops = routes.reject do |route|
-          hidden = route.route_hidden
+          hidden = route.options[:hidden]
           hidden && hidden.respond_to?(:call) ? hidden.call : hidden
         end
 
@@ -532,7 +532,7 @@ module GrapeSwagger
               nickname: route_settings_description[:nickname] || (route.request_method + route.path.gsub(/[\/:\(\)\.]/, '-')),
               method: route.request_method,
               parameters: @@documentation_class.parse_header_params(route.headers, scope: i18n_scope, key: i18n_key) +
-                          @@documentation_class.parse_params(route.route_params, route.path, route.request_method,
+                          @@documentation_class.parse_params(route.params, route.path, route.request_method,
                                                              scope: i18n_scope, key: i18n_key),
               type: route_settings_description[:is_array] ? 'array' : 'void'
             }
